@@ -3,14 +3,42 @@ import JSZip from "jszip";
 export default defineContentScript({
 	matches: ["https://x.com/*", "https://twitter.com/*"],
 	main: async () => {
+		let isDownloadCancelled = false;
+		let downloadAbortController = new AbortController();
+
+		async function triggerDownload(
+			blob: Blob,
+			filename: string
+		): Promise<void> {
+			return new Promise((resolve, reject) => {
+				try {
+					const downloadUrl = URL.createObjectURL(blob);
+					const link = document.createElement("a");
+					link.href = downloadUrl;
+					link.download = filename;
+
+					// Add to document and force click
+					document.body.appendChild(link);
+					link.click();
+
+					// Clean up
+					setTimeout(() => {
+						document.body.removeChild(link);
+						URL.revokeObjectURL(downloadUrl);
+						resolve();
+					}, 1000);
+				} catch (error) {
+					reject(error);
+				}
+			});
+		}
+
 		function injectDownloadButton() {
-			// Find the button group container
 			const buttonGroup = document.querySelector(
 				'div[data-testid="placementTracking"]'
 			)?.parentElement;
 			if (!buttonGroup || document.querySelector("#x-image-downloader")) return;
 
-			// Create download button matching X's style
 			const downloadBtn = document.createElement("button");
 			downloadBtn.id = "x-image-downloader";
 			downloadBtn.className =
@@ -26,17 +54,14 @@ export default defineContentScript({
         </div>
       `;
 
-			// Add click handler
 			downloadBtn.onclick = () => {
 				showImageCountPrompt();
 			};
 
-			// Insert before the last element
 			buttonGroup.insertBefore(downloadBtn, buttonGroup.lastElementChild);
 		}
 
 		function showImageCountPrompt() {
-			// Create modal
 			const modal = document.createElement("div");
 			modal.style.cssText = `
         position: fixed;
@@ -66,7 +91,6 @@ export default defineContentScript({
 
 			document.body.appendChild(modal);
 
-			// Add backdrop
 			const backdrop = document.createElement("div");
 			backdrop.style.cssText = `
         position: fixed;
@@ -79,7 +103,6 @@ export default defineContentScript({
       `;
 			document.body.appendChild(backdrop);
 
-			// Handle buttons
 			const input = modal.querySelector("input");
 			// biome-ignore lint/style/noNonNullAssertion: <explanation>
 			modal.querySelector<HTMLButtonElement>("#cancel-download")!.onclick =
@@ -103,7 +126,6 @@ export default defineContentScript({
 				};
 		}
 
-		// Progress bar UI
 		function createProgressBar() {
 			const container = document.createElement("div");
 			container.style.cssText = `
@@ -135,6 +157,7 @@ export default defineContentScript({
         height: 6px;
         border-radius: 3px;
         overflow: hidden;
+        margin-bottom: 10px;
       `;
 
 			const progressBar = document.createElement("div");
@@ -153,10 +176,39 @@ export default defineContentScript({
       `;
 			details.textContent = "Preparing...";
 
+			const cancelButton = document.createElement("button");
+			cancelButton.style.cssText = `
+        padding: 6px 12px;
+        border-radius: 4px;
+        border: 1px solid #444;
+        background: transparent;
+        color: #ff4444;
+        cursor: pointer;
+        font-size: 12px;
+        margin-top: 10px;
+        width: 100%;
+        transition: background-color 0.2s;
+      `;
+			cancelButton.textContent = "Cancel Download";
+			cancelButton.onmouseover = () => {
+				cancelButton.style.backgroundColor = "rgba(255, 68, 68, 0.1)";
+			};
+			cancelButton.onmouseout = () => {
+				cancelButton.style.backgroundColor = "transparent";
+			};
+			cancelButton.onclick = () => {
+				isDownloadCancelled = true;
+				details.textContent = "Cancelling and preparing downloaded images...";
+				cancelButton.disabled = true;
+				cancelButton.style.opacity = "0.5";
+				cancelButton.style.cursor = "default";
+			};
+
 			progressBarContainer.appendChild(progressBar);
 			container.appendChild(title);
 			container.appendChild(progressBarContainer);
 			container.appendChild(details);
+			container.appendChild(cancelButton);
 			document.body.appendChild(container);
 
 			return {
@@ -167,6 +219,9 @@ export default defineContentScript({
 					title.innerHTML = `<span>Downloading Images</span><span>${percent}%</span>`;
 					details.textContent = `${phase} (${current}/${total})`;
 				},
+				updateStatus: (message: string) => {
+					details.textContent = message;
+				},
 				finish: () => {
 					container.style.opacity = "0";
 					container.style.transition = "opacity 0.5s ease";
@@ -175,19 +230,60 @@ export default defineContentScript({
 			};
 		}
 
+		async function handleRateLimit(progress: {
+			updateStatus: (message: string) => void;
+		}) {
+			const waitTime = 60; // seconds to wait
+			for (let i = waitTime; i > 0; i--) {
+				if (isDownloadCancelled) break;
+				progress.updateStatus(`Rate limit reached. Waiting ${i} seconds...`);
+				await new Promise((resolve) => setTimeout(resolve, 1000));
+			}
+		}
+
+		async function fetchWithRetry(
+			url: string,
+			maxRetries = 3
+		): Promise<Response> {
+			let retries = 0;
+			while (retries < maxRetries) {
+				try {
+					const response = await fetch(url, {
+						signal: downloadAbortController.signal,
+					});
+					if (response.status === 429) {
+						throw new Error("rate-limit");
+					}
+					return response;
+				} catch (error) {
+					if ((error as Error).name === "AbortError") {
+						throw error;
+					}
+					if (
+						(error as Error).message === "rate-limit" &&
+						retries < maxRetries - 1
+					) {
+						retries++;
+						await new Promise((resolve) => setTimeout(resolve, 1000 * 60));
+						continue;
+					}
+					throw error;
+				}
+			}
+			throw new Error("Max retries reached");
+		}
+
 		function getHighestQualityUrl(url: string): string {
 			const baseUrl = url.split("?")[0];
 			return url.includes("format=jpg") || url.endsWith(".jpg")
-				? `${baseUrl}?format=jpg&name=8192x8192`
+				? `${baseUrl}?format=jpg&name=orig`
 				: `${baseUrl}?format=png&name=orig`;
 		}
 
 		async function collectImages(
 			count: number,
 			progress: {
-				container: HTMLDivElement;
 				updateProgress: (current: number, total: number, phase: string) => void;
-				finish: () => void;
 			}
 		): Promise<Array<{ url: string; ext: string }>> {
 			const images: Array<{ url: string; ext: string }> = [];
@@ -196,11 +292,19 @@ export default defineContentScript({
 			const maxAttempts = 50;
 
 			while (images.length < count && attempts < maxAttempts) {
+				if (isDownloadCancelled) {
+					return images; // Return whatever we've collected so far
+				}
+
 				const imgElements = document.querySelectorAll<HTMLImageElement>(
 					'article img[src*="pbs.twimg.com/media"]'
 				);
 
 				for (const img of imgElements) {
+					if (isDownloadCancelled) {
+						return images; // Return immediately if cancelled
+					}
+
 					const url = img.src;
 					const highQualityUrl = getHighestQualityUrl(url);
 					const extension =
@@ -231,74 +335,163 @@ export default defineContentScript({
 			return images;
 		}
 
-		async function handleImageCollection(count: number) {
-			const progress = createProgressBar();
-
+		async function createAndDownloadZip(
+			downloadedImages: { blob: Blob; ext: string }[],
+			progress: { updateStatus: (message: string) => void }
+		) {
 			try {
-				// Collect images
-				const images = await collectImages(count, progress);
-				if (!images.length) {
-					throw new Error("No images found");
-				}
-
+				progress.updateStatus("Creating zip file...");
 				const zip = new JSZip();
-				let downloadedCount = 0;
 
-				// Fetch all images and add to zip
-				const fetchPromises = images.map(async ({ url, ext }, index) => {
-					try {
-						const response = await fetch(url);
-						if (!response.ok) {
-							throw new Error(`HTTP error! status: ${response.status}`);
-						}
-						const blob = await response.blob();
-						zip.file(`image_${index + 1}.${ext}`, blob);
-
-						downloadedCount++;
-						progress.updateProgress(
-							downloadedCount,
-							images.length,
-							"Downloading images"
-						);
-					} catch (error) {
-						console.error(`Failed to fetch image ${index + 1}:`, error);
-					}
+				downloadedImages.forEach((img, index) => {
+					zip.file(`image_${index + 1}.${img.ext}`, img.blob);
 				});
 
-				await Promise.all(fetchPromises);
+				progress.updateStatus("Generating zip...");
+				const zipBlob = await zip.generateAsync({
+					type: "blob",
+					compression: "STORE", // Faster compression for quicker feedback
+				});
 
-				// Generate zip
-				progress.updateProgress(
-					images.length,
-					images.length,
-					"Creating zip file"
-				);
-				const zipBlob = await zip.generateAsync({ type: "blob" });
-				const downloadUrl = URL.createObjectURL(zipBlob);
-
+				progress.updateStatus("Initiating download...");
 				const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-				const link = document.createElement("a");
-				link.href = downloadUrl;
-				link.download = `x-images-${timestamp}.zip`;
-				document.body.appendChild(link);
-				link.click();
-				document.body.removeChild(link);
+				const filename = `x-images-${timestamp}${
+					isDownloadCancelled ? "-partial" : ""
+				}.zip`;
 
-				setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
-
-				// Remove progress bar after a short delay
-				setTimeout(() => progress.finish(), 1000);
-
-				return { success: true, count: images.length };
+				await triggerDownload(zipBlob, filename);
+				progress.updateStatus("Download complete!");
 			} catch (error) {
-				progress.container.remove();
-				throw new Error(
-					`Failed to process images: ${(error as Error).message}`
-				);
+				console.error("Error in zip creation/download:", error);
+				progress.updateStatus("Error saving images. Please try again.");
+				throw error;
 			}
 		}
 
-		// Initialize
+		async function handleImageCollection(count: number) {
+			isDownloadCancelled = false;
+			downloadAbortController = new AbortController();
+			const progress = createProgressBar();
+			const downloadedImages: { blob: Blob; ext: string }[] = [];
+
+			try {
+				// Start collecting images
+				let collectedImages: Array<{ url: string; ext: string }> = [];
+
+				try {
+					collectedImages = await collectImages(count, progress);
+				} catch (collectionError) {
+					console.error("Collection error:", collectionError);
+					// If we have any collected images, continue with those
+					if (collectedImages.length === 0) {
+						throw new Error("No images found");
+					}
+				}
+
+				// Process whatever images we've collected, even if cancelled during collection
+				const imagesToProcess = isDownloadCancelled
+					? collectedImages.slice(0, collectedImages.length)
+					: collectedImages;
+
+				if (imagesToProcess.length > 0) {
+					progress.updateStatus(
+						`Processing ${imagesToProcess.length} collected images...`
+					);
+
+					for (let i = 0; i < imagesToProcess.length; i++) {
+						if (isDownloadCancelled && downloadedImages.length > 0) {
+							// If cancelled and we have some downloads, stop and save what we have
+							break;
+						}
+
+						const { url, ext } = imagesToProcess[i];
+						try {
+							const response = await fetchWithRetry(url);
+
+							if (!response.ok) {
+								if (response.status === 429) {
+									await handleRateLimit(progress);
+									if (!isDownloadCancelled) {
+										const retryResponse = await fetchWithRetry(url);
+										if (retryResponse.ok) {
+											const blob = await retryResponse.blob();
+											downloadedImages.push({ blob, ext });
+										}
+									}
+									continue;
+								}
+								throw new Error(`HTTP error! status: ${response.status}`);
+							}
+
+							const blob = await response.blob();
+							downloadedImages.push({ blob, ext });
+							progress.updateProgress(
+								i + 1,
+								imagesToProcess.length,
+								"Downloading images"
+							);
+						} catch (error) {
+							if ((error as Error).name === "AbortError") {
+								break;
+							}
+							console.error(`Failed to fetch image ${i + 1}:`, error);
+						}
+					}
+
+					// Always try to save downloaded images, even if cancelled
+					if (downloadedImages.length > 0) {
+						progress.updateStatus(
+							`Saving ${downloadedImages.length} downloaded images...`
+						);
+						try {
+							await createAndDownloadZip(downloadedImages, progress);
+							progress.updateStatus("Download complete!");
+						} catch (zipError) {
+							progress.updateStatus("Error creating zip file");
+							throw zipError;
+						}
+					} else {
+						progress.updateStatus("No images were downloaded successfully");
+					}
+				} else {
+					progress.updateStatus("No images were found to download");
+				}
+
+				setTimeout(() => progress.finish(), 2000);
+				return {
+					success: downloadedImages.length > 0,
+					count: downloadedImages.length,
+					reason: isDownloadCancelled ? "cancelled" : "completed",
+				};
+			} catch (error) {
+				console.error("Process error:", error);
+
+				// Even on error, try to save any successfully downloaded images
+				if (downloadedImages.length > 0) {
+					progress.updateStatus(
+						`Error occurred. Saving ${downloadedImages.length} images...`
+					);
+					try {
+						await createAndDownloadZip(downloadedImages, progress);
+						progress.updateStatus("Partial download saved successfully");
+					} catch (zipError) {
+						progress.updateStatus("Failed to save images");
+					}
+				} else {
+					progress.updateStatus("Failed to download any images");
+				}
+
+				setTimeout(() => progress.finish(), 2000);
+				return {
+					success: false,
+					count: downloadedImages.length,
+					reason: "error",
+				};
+			} finally {
+				downloadAbortController = new AbortController();
+			}
+		}
+
 		const observer = new MutationObserver(() => {
 			injectDownloadButton();
 		});
@@ -308,7 +501,6 @@ export default defineContentScript({
 			subtree: true,
 		});
 
-		// Initial check
 		injectDownloadButton();
 	},
 });
