@@ -178,7 +178,7 @@ export default defineContentScript({
 		function getHighestQualityUrl(url: string): string {
 			const baseUrl = url.split("?")[0];
 			return url.includes("format=jpg") || url.endsWith(".jpg")
-				? `${baseUrl}?format=jpg&name=4096x4096`
+				? `${baseUrl}?format=jpg&name=8192x8192`
 				: `${baseUrl}?format=png&name=orig`;
 		}
 
