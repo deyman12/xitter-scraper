@@ -33,6 +33,23 @@ export default defineContentScript({
 			});
 		}
 
+		async function getPostMetadata(postElement: Element): Promise<string> {
+			const textContent =
+				postElement.querySelector('div[data-testid="tweetText"]')
+					?.textContent || "";
+			const username =
+				postElement.querySelector('div[dir="ltr"] span')?.textContent || "";
+			const timestamp =
+				postElement.querySelector("time")?.getAttribute("datetime") || "";
+
+			let metadata = "";
+			if (username) metadata += `Username: ${username}\n`;
+			if (timestamp) metadata += `Posted: ${timestamp}\n`;
+			if (textContent) metadata += `Caption: ${textContent}\n`;
+
+			return metadata;
+		}
+
 		function injectDownloadButton() {
 			const buttonGroup = document.querySelector(
 				'div[data-testid="placementTracking"]'
@@ -288,6 +305,7 @@ export default defineContentScript({
 		): Promise<Array<{ url: string; ext: string }>> {
 			const images: Array<{ url: string; ext: string }> = [];
 			let lastHeight = 0;
+			const username = window.location.pathname.split("/")[1];
 			let attempts = 0;
 			const maxAttempts = 50;
 
@@ -297,12 +315,19 @@ export default defineContentScript({
 				}
 
 				const imgElements = document.querySelectorAll<HTMLImageElement>(
-					'article img[src*="pbs.twimg.com/media"]'
+					'article[data-testid="tweet"] img[src*="pbs.twimg.com/media"]'
 				);
 
 				for (const img of imgElements) {
 					if (isDownloadCancelled) {
 						return images; // Return immediately if cancelled
+					}
+
+					const article = img.closest('article[data-testid="tweet"]');
+					let metadata = "";
+
+					if (article) {
+						metadata = await getPostMetadata(article);
 					}
 
 					const url = img.src;
@@ -338,7 +363,7 @@ export default defineContentScript({
 		async function createAndDownloadZip(
 			downloadedImages: { blob: Blob; ext: string }[],
 			progress: { updateStatus: (message: string) => void }
-		) {
+		) {Hel
 			try {
 				progress.updateStatus("Creating zip file...");
 				const zip = new JSZip();
@@ -353,11 +378,11 @@ export default defineContentScript({
 					compression: "STORE", // Faster compression for quicker feedback
 				});
 
+				const username = window.location.pathname.split("/")[1];
 				progress.updateStatus("Initiating download...");
-				const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-				const filename = `x-images-${timestamp}${
-					isDownloadCancelled ? "-partial" : ""
-				}.zip`;
+				const filename = `x_${username}_${
+					downloadedImages.length
+				}_[xitter_scraper]${isDownloadCancelled ? "-partial" : ""}.zip`;
 
 				await triggerDownload(zipBlob, filename);
 				progress.updateStatus("Download complete!");
