@@ -363,7 +363,7 @@ export default defineContentScript({
 		async function createAndDownloadZip(
 			downloadedImages: { blob: Blob; ext: string }[],
 			progress: { updateStatus: (message: string) => void }
-		) {Hel
+		) {
 			try {
 				progress.updateStatus("Creating zip file...");
 				const zip = new JSZip();
