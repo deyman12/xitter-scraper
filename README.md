@@ -2,6 +2,14 @@
 
 ![Xitter-scraper banner](/banner.jpg?raw=true)
 
+<!-- available in the chrome store badge -->
+
+<a href="https://chromewebstore.google.com/detail/xitter-scraper/cfkdbndljmndgmnagcekhfjplieaagbk"><img src="store-images/avbl-chrome-store-badge.png"></a>
+
+![Chrome Web Store Version](https://img.shields.io/chrome-web-store/v/cfkdbndljmndgmnagcekhfjplieaagbk?link=https%3A%2F%2Fchromewebstore.google.com%2Fdetail%2Fxitter-scraper%2Fcfkdbndljmndgmnagcekhfjplieaagbk)
+
+<!-- downloads badge -->
+
 <p align="justify">
 
 </p>
