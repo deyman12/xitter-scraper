@@ -76,7 +76,8 @@ bun run build
 Run the dev server:
 
 ```bash
-pnpm dev
+bun dev
+-- then, see no 4 at installation section!
 ```
 
 Build for production:
