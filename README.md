@@ -8,6 +8,11 @@
 
 ![Chrome Web Store Version](https://img.shields.io/chrome-web-store/v/cfkdbndljmndgmnagcekhfjplieaagbk?link=https%3A%2F%2Fchromewebstore.google.com%2Fdetail%2Fxitter-scraper%2Fcfkdbndljmndgmnagcekhfjplieaagbk)
 
+[![Release](https://img.shields.io/github/v/release/deyman12/xitter-scraper?label=release&logo=github)](https://github.com/deyman12/xitter-scraper/releases)
+
+
+![Build]
+
 <!-- downloads badge -->
 
 <p align="justify">
