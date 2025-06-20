@@ -251,6 +251,7 @@ export default defineContentScript({
 
     function showImageCountPrompt() {
       const modal = document.createElement("div");
+      modal.id = "xitter-modal";
       modal.style.cssText = `
         position: fixed;
         top: 50%;
@@ -293,6 +294,7 @@ export default defineContentScript({
           </label>
         </div>
         <div style="display: flex; justify-content: flex-end; gap: 10px;">
+          <button id="clean-cache" style="padding: 4px 10px; border-radius: 4px; border: 1px solid red; background: transparent; color: #fff; cursor: pointer; font-size: 14px; width: 100px; height: 40px;">Clean Cache</button>
           <button id="cancel-download" style="padding: 8px 16px; border-radius: 6px; border: 1px solid #333; background: transparent; color: #fff; cursor: pointer;">Cancel</button>
           <button id="start-download" style="padding: 8px 16px; border-radius: 6px; border: none; background: #3291ff; color: #fff; cursor: pointer;">Download</button>
         </div>
@@ -321,6 +323,29 @@ export default defineContentScript({
           modal.remove();
           backdrop.remove();
         };
+
+      modal.querySelector<HTMLButtonElement>("#clean-cache")!.onclick = () => {
+        let username = /\.com\/(\w+)/.exec(window.location.href);
+        let cache = [];
+        if (username) {
+          cache = JSON.parse(
+            localStorage.getItem(`xitter-cache-${username[1]}`) ?? "[]"
+          );
+          if (cache.length > 0) {
+            localStorage.removeItem(`xitter-cache-${username[1]}`);
+          }
+          var p = document.createElement("p");
+          p.id = "xitter-cache-cleaned";
+          p.textContent =
+            cache.length > 0
+              ? ` ${cache.length} tweets cached for ${username[1]} cleaned!`
+              : `No tweets cached for ${username[1]}`;
+          modal.insertBefore(p, modal.children[1]!);
+          setTimeout(() => {
+            p.remove();
+          }, 3000);
+        }
+      };
 
       // biome-ignore lint/style/noNonNullAssertion: <explanation>
       modal.querySelector<HTMLButtonElement>("#start-download")!.onclick =
@@ -483,6 +508,9 @@ export default defineContentScript({
           title.innerHTML = `<span>Downloading Images</span><span>${percent}%</span>`;
           details.textContent = `${phase} (${current}/${total})`;
         },
+        updateAttemps: (current: number, total: number) => {
+          details.textContent = `<span>Scrolling Attempts</span><span>(${current}/${total})</span>`;
+        },
         updateStatus: (message: string) => {
           details.textContent = message;
         },
@@ -549,6 +577,8 @@ export default defineContentScript({
       count: number,
       progress: {
         updateProgress: (current: number, total: number, phase: string) => void;
+        updateStatus: (message: string) => void;
+        updateAttemps: (current: number, total: number) => void;
       }
     ): Promise<
       Array<{
@@ -677,11 +707,7 @@ export default defineContentScript({
             Math.ceil(window.innerHeight + window.scrollY) >=
             document.body.scrollHeight
           ) {
-            progress.updateProgress(
-              images.length,
-              count,
-              "Reached bottom of page"
-            );
+            progress.updateStatus("Reached bottom of page");
             break;
           }
 
@@ -895,9 +921,23 @@ export default defineContentScript({
         }
 
         // Process whatever images we've collected, even if cancelled during collection
-        const imagesToProcess = isDownloadCancelled
+        let imagesToProcess = isDownloadCancelled
           ? collectedImages.slice(0, collectedImages.length)
           : collectedImages;
+
+        let username = imagesToProcess[0].username;
+        const cachedImages = localStorage.getItem(`xitter-cache-${username}`);
+        if (cachedImages) {
+          progress.updateStatus("Checking for cached images...");
+          const cachedImageIds = JSON.parse(cachedImages);
+          imagesToProcess = imagesToProcess.filter(
+            (image) => !cachedImageIds.includes(image.tweetId)
+          );
+          let totalImageSkiped = imagesToProcess.length - cachedImageIds.length;
+          progress.updateStatus(
+            `Skipping ${totalImageSkiped} cached images...`
+          );
+        }
 
         if (imagesToProcess.length > 0) {
           progress.updateStatus(
@@ -965,6 +1005,23 @@ export default defineContentScript({
 
           // Always try to save downloaded images, even if cancelled
           if (downloadedImages.length > 0) {
+            progress.updateStatus(
+              `Saving ${downloadedImages.length} images to cache...`
+            );
+            let username = downloadedImages[0].username;
+            let tweetcache = downloadedImages.map((i) => i.tweetId);
+            let cachedImages = localStorage.getItem(`xitter-cache-${username}`);
+            if (cachedImages) {
+              cachedImages = JSON.stringify([
+                ...JSON.parse(cachedImages),
+                ...tweetcache,
+              ]);
+            } else {
+              cachedImages = JSON.stringify(tweetcache);
+            }
+
+            localStorage.setItem(`xitter-cache-${username}`, cachedImages);
+
             progress.updateStatus(
               `Saving ${downloadedImages.length} downloaded images with metadata...`
             );
